@@ -7,12 +7,14 @@ One glance tells you whether Codex is routing through OpenCodex or talking to st
 ```
 ● OpenCodex — On
    Routing 3 gateway models · port 10100
+   Shadow calls → gateway · retries sub Wed 8:59 PM   (only while the intercept is on)
 Turn Off (back to stock Codex)
 ──────────────
 Open Dashboard…       ← model toggles, live request log, providers
 ──────────────
 Settings ▸            ✓ Start at Login
                       ✓ Keep Proxy Alive   ← auto-restarts a dead proxy so Codex never silently breaks
+                      ✓ Shadow Calls via Gateway   ← auto-reverts when your subscription has capacity again
                       ──────────
                       OpenCodex 2.25.0 — up to date   (becomes "Update OpenCodex (x → y)" when npm has newer)
                       Uninstall…
@@ -68,6 +70,17 @@ prints five lines: mode (`on|off|broken|absent`), installed version, routed mode
 - **Keep Proxy Alive** retries a dead proxy up to 3 times, then leaves the ⚠ menu for you.
 - **Update** = `npm install -g` latest, restarting the proxy if it was on.
 - **Uninstall** removes the npm package but keeps `~/.opencodex` so a reinstall restores your setup.
+
+## Shadow-call auto-revert
+
+Codex fires small background "shadow calls" (thread titles, summaries) at your ChatGPT subscription. When the subscription hits its usage limit those calls 429. OpenCodex's *Shadow Call Intercept* can reroute them to a gateway model — but it's a static switch with no failover, so left alone it would keep spending gateway credit after your subscription resets.
+
+The tray closes that loop. While **Shadow Calls via Gateway** is on, it periodically runs `ocx-tray-ctl shadow-probe`: lift the intercept for a moment, send one tiny native low-effort request, and
+
+- **429** → still limited: the intercept is restored and the error's reset timestamp (OpenAI's `resets_at`, or the proxy's own cooldown time) schedules the next probe — no blind polling;
+- **200** → subscription is back: the intercept stays off and shadow calls return to your plan.
+
+A failed probe costs nothing; a successful one is a single low-effort request. The status line shows the next retry time.
 
 ## License
 

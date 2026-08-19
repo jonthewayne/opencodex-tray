@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var busy: String? = nil     // non-nil while a ctl command runs; shown at top of menu
     var fixAttempts = 0         // keep-alive backoff: stop after 3 failed restarts
     var warnedNoKey = false
+    var shadowOn = false        // proxy's shadow-call intercept (Codex titles/summaries → gateway)
 
     var keepAlive: Bool {
         get { defaults.object(forKey: "KeepProxyAlive") as? Bool ?? true }
@@ -61,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         checkForUpdate()
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.refresh() }
         Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.checkForUpdate() }
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.shadowTick() }
     }
 
     // MARK: state
@@ -84,6 +86,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.fixAttempts += 1
                 self.startProxy(verb: "Restarting proxy…")
             }
+        }
+    }
+
+    // MARK: shadow-call auto-revert
+    // While the intercept routes Codex shadow calls to the gateway, periodically try one tiny
+    // native call. When the subscription serves it again, the intercept is flipped off for good.
+    // A failed probe costs nothing (429); a successful one is a single low-effort request.
+
+    func shadowTick() {
+        guard mode == "on", busy == nil else { return }
+        run(["shadow-state"]) { out, _ in
+            self.shadowOn = (out == "on")
+            guard self.shadowOn else {
+                self.defaults.removeObject(forKey: "ShadowResetsAt")
+                return
+            }
+            let now = Date().timeIntervalSince1970
+            let resetsAt = self.defaults.double(forKey: "ShadowResetsAt")
+            let lastProbe = self.defaults.double(forKey: "LastShadowProbe")
+            // probe when there is no known retry time or it has passed (2 min grace), at most every 30 min
+            if (resetsAt == 0 || now > resetsAt + 120) && now - lastProbe > 1800 {
+                self.shadowProbe()
+            }
+        }
+    }
+
+    func shadowProbe() {
+        defaults.set(Date().timeIntervalSince1970, forKey: "LastShadowProbe")
+        run(["shadow-probe"]) { out, _ in
+            if out == "reverted" {
+                self.shadowOn = false
+                self.defaults.removeObject(forKey: "ShadowResetsAt")
+            } else if out.hasPrefix("limited") {
+                let parts = out.components(separatedBy: " ")
+                if parts.count > 1, let t = Double(parts[1]) {
+                    self.defaults.set(t, forKey: "ShadowResetsAt")
+                } else {
+                    // no retry hint in the error — try again in 6 h
+                    self.defaults.set(Date().timeIntervalSince1970 + 6 * 3600, forKey: "ShadowResetsAt")
+                }
+            }
+        }
+    }
+
+    func shadowStatusLine() -> String {
+        let t = defaults.double(forKey: "ShadowResetsAt")
+        guard t > 0 else { return "Shadow calls → gateway · watching subscription" }
+        let f = DateFormatter()
+        f.dateFormat = "EEE h:mm a"
+        return "Shadow calls → gateway · retries sub \(f.string(from: Date(timeIntervalSince1970: t)))"
+    }
+
+    @objc func toggleShadow() {
+        let cmd = shadowOn ? "shadow-off" : "shadow-on"
+        busy = shadowOn ? "Shadow calls → subscription…" : "Shadow calls → gateway…"
+        run([cmd]) { _, _ in
+            self.busy = nil
+            self.defaults.removeObject(forKey: "ShadowResetsAt")
+            self.defaults.set(0.0, forKey: "LastShadowProbe")
+            self.shadowTick()
         }
     }
 
@@ -116,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         refresh()
+        shadowTick()
         populate(menu)
     }
 
@@ -166,6 +229,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "on":
             addInfo(menu, "● OpenCodex — On")
             addSmall(menu, "Routing \(routedCount) gateway models · port \(port)")
+            if shadowOn { addSmall(menu, shadowStatusLine()) }
             menu.addItem(.separator())
             add(menu, "Turn Off (back to stock Codex)", #selector(turnOff))
             menu.addItem(.separator())
@@ -196,6 +260,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         addLoginToggle(sub)
         let ka = add(sub, "Keep Proxy Alive", #selector(toggleKeepAlive))
         ka.state = keepAlive ? .on : .off
+        if mode == "on" {
+            let sc = add(sub, "Shadow Calls via Gateway", #selector(toggleShadow))
+            sc.state = shadowOn ? .on : .off
+        }
         sub.addItem(.separator())
         // version line: update action when npm has something newer, plain label otherwise
         if !latestVersion.isEmpty && !localVersion.isEmpty && latestVersion != localVersion {

@@ -9,6 +9,13 @@
 #   update        — npm install -g latest; restarts the proxy if it was on
 #   install       — npm install -g the OpenCodex package
 #   uninstall     — off + npm uninstall -g (keeps ~/.opencodex settings for a later reinstall)
+#   shadow-state  — is the proxy's shadow-call intercept on? prints on | off | unknown
+#   shadow-on     — route Codex shadow calls (titles, summaries) to the gateway model
+#   shadow-off    — put shadow calls back on the ChatGPT subscription
+#   shadow-probe  — momentarily lift the intercept and try one tiny native call:
+#                   prints "reverted" (subscription works again — intercept left off),
+#                   "limited <epoch>" (still 429 — intercept restored; epoch = quota reset time),
+#                   or "disabled" (intercept wasn't on)
 
 PKG="@bitkyc08/opencodex"
 KEYCHAIN_SERVICE="VERCEL_AI_GATEWAY_KEY"
@@ -30,6 +37,19 @@ port() {
 }
 
 have_ocx() { command -v ocx >/dev/null 2>&1; }
+admin_curl() { curl -s -m 5 -H "Authorization: Bearer $(cat "$OCX_HOME/admin-api-token" 2>/dev/null)" "$@"; }
+shadow_url() { echo "http://127.0.0.1:$(port)/api/shadow-call-settings"; }
+# PUT the current shadow settings back with enabled flipped to $1 (true|false)
+shadow_put() {
+  local body
+  body=$(admin_curl "$(shadow_url)" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+d['enabled'] = $1
+d.pop('ok', None)
+print(json.dumps(d))" 2>/dev/null)
+  [ -n "$body" ] && admin_curl -X PUT -H 'Content-Type: application/json' -d "$body" "$(shadow_url)" >/dev/null
+}
 injected() { grep -q 'Auto-injected by opencodex' "$CONFIG" 2>/dev/null; }
 healthy()  { curl -s -m 2 "http://127.0.0.1:$(port)/healthz" 2>/dev/null | grep -q '"status":"ok"'; }
 
@@ -102,7 +122,52 @@ case "$1" in
     npm uninstall -g "$PKG" >>"$LOG" 2>&1 || { echo "uninstall failed — see $LOG"; exit 1; }
     echo "uninstalled"
     ;;
+  shadow-state)
+    healthy || { echo unknown; exit 0; }
+    if admin_curl "$(shadow_url)" | grep -q '"enabled":true'; then echo on; else echo off; fi
+    ;;
+  shadow-on)
+    shadow_put True; echo ok
+    ;;
+  shadow-off)
+    shadow_put False; echo ok
+    ;;
+  shadow-probe)
+    healthy || { echo "error proxy-down"; exit 1; }
+    settings=$(admin_curl "$(shadow_url)")
+    echo "$settings" | grep -q '"enabled":true' || { echo disabled; exit 0; }
+    src=$(echo "$settings" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sourceModels"][0])' 2>/dev/null)
+    [ -z "$src" ] && src="gpt-5.6-luna"
+    # lift the intercept so the probe reaches the native provider, not the gateway
+    shadow_put False
+    resp=$(mktemp)
+    code=$(curl -s -m 30 -o "$resp" -w '%{http_code}' -X POST "http://127.0.0.1:$(port)/v1/responses" \
+      -H 'Content-Type: application/json' \
+      -d "{\"model\":\"$src\",\"instructions\":\"Reply with the single word: ok\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"ok?\"}]}],\"reasoning\":{\"effort\":\"low\"},\"stream\":true,\"store\":false}")
+    if [ "$code" = "200" ]; then
+      rm -f "$resp"
+      echo reverted
+      exit 0
+    fi
+    shadow_put True
+    # retry hint comes in two shapes: OpenAI upstream sends resets_at (epoch);
+    # the proxy's own account-cooldown gate embeds an ISO time in the message
+    resets=$(python3 -c '
+import json, re, sys, datetime
+try:
+    err = json.load(open(sys.argv[1])).get("error", {})
+    r = err.get("resets_at")
+    if not r:
+        m = re.search(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)Z", err.get("message", ""))
+        if m:
+            r = int(datetime.datetime.fromisoformat(m.group(1) + "+00:00").timestamp())
+    print(r or "")
+except Exception:
+    print("")' "$resp" 2>/dev/null)
+    rm -f "$resp"
+    echo "limited ${resets:-unknown}"
+    ;;
   *)
-    echo "usage: ocx-tray-ctl {state|on|off|check-update|update|install|uninstall}" >&2; exit 1
+    echo "usage: ocx-tray-ctl {state|on|off|check-update|update|install|uninstall|shadow-state|shadow-on|shadow-off|shadow-probe}" >&2; exit 1
     ;;
 esac
