@@ -14,7 +14,7 @@ Open Dashboard…       ← model toggles, live request log, providers
 ──────────────
 Settings ▸            ✓ Start at Login
                       ✓ Keep Proxy Alive   ← auto-restarts a dead proxy so Codex never silently breaks
-                      ✓ Shadow Calls via Gateway   ← auto-reverts when your subscription has capacity again
+                      ✓ Shadow Calls: Gateway When Limited   ← standing policy; tray flips the intercept both ways
                       ──────────
                       OpenCodex 2.25.0 — up to date   (becomes "Update OpenCodex (x → y)" when npm has newer)
                       Uninstall…
@@ -71,14 +71,14 @@ prints five lines: mode (`on|off|broken|absent`), installed version, routed mode
 - **Update** = `npm install -g` latest, restarting the proxy if it was on.
 - **Uninstall** removes the npm package but keeps `~/.opencodex` so a reinstall restores your setup.
 
-## Shadow-call auto-revert
+## Shadow-call failover
 
-Codex fires small background "shadow calls" (thread titles, summaries) at your ChatGPT subscription. When the subscription hits its usage limit those calls 429. OpenCodex's *Shadow Call Intercept* can reroute them to a gateway model — but it's a static switch with no failover, so left alone it would keep spending gateway credit after your subscription resets.
+Codex fires small background "shadow calls" (thread titles, summaries) at your ChatGPT subscription. When the subscription hits its usage limit those calls 429. OpenCodex's *Shadow Call Intercept* can reroute them to a gateway model — but it's a static on/off switch with no failover of its own.
 
-The tray closes that loop. While **Shadow Calls via Gateway** is on, it runs `ocx-tray-ctl shadow-probe` every 30 minutes: lift the intercept for a moment, send one tiny native low-effort request, and
+The tray turns it into a policy. **Shadow Calls: Gateway When Limited** is a standing instruction, not a state indicator — it stays checked (or unchecked) until *you* change it:
 
-- **429** → still limited: the intercept is restored, and the error's reset timestamp (OpenAI's `resets_at`, or the proxy's own cooldown time) is shown in the status line;
-- **200** → subscription is back: the intercept stays off, shadow calls return to your plan, and a toast card drops down under the menu-bar icon — floating above other windows until you click it — so you know it's time to move your main Codex model off the gateway too.
+- **Checked** — use the gateway only when the subscription needs it. While shadow calls are native, the tray watches the proxy's request log every minute (`shadow-check`); a fresh native 429 means the subscription just hit its limit, so the intercept is flipped **on** and a toast tells you. While the intercept is on, `shadow-probe` runs every 30 minutes — lift the intercept for a moment, send one tiny native low-effort request — and a 200 means the subscription is back: the intercept is flipped **off** and a toast card drops down under the menu-bar icon, floating above other windows until you dismiss it, so you know to move your main Codex threads off the gateway too. A 429 restores the intercept and shows the error's reset timestamp in the status line.
+- **Unchecked** — never: shadow calls always stay on your subscription (the intercept is turned off when you uncheck it).
 
 Probing is on a fixed 30-minute cadence rather than waiting for the announced reset, because OpenAI sometimes resets quota early. A failed probe costs nothing; a successful one is a single low-effort request. (Verified: a 429 on one model doesn't cool down others — probing never blocks models that still work.) Launch the app with `--test-toast` to preview the notification card.
 

@@ -12,10 +12,11 @@
 #   shadow-state  — is the proxy's shadow-call intercept on? prints on | off | unknown
 #   shadow-on     — route Codex shadow calls (titles, summaries) to the gateway model
 #   shadow-off    — put shadow calls back on the ChatGPT subscription
-#   shadow-probe  — momentarily lift the intercept and try one tiny native call:
-#                   prints "reverted" (subscription works again — intercept left off),
-#                   "limited <epoch>" (still 429 — intercept restored; epoch = quota reset time),
-#                   or "disabled" (intercept wasn't on)
+#   shadow-check  — passive: any native 429s in the request log in the last 10 min? prints limited | ok | unknown
+#   shadow-probe  — try one tiny native call (lifting the intercept for a moment if it's on):
+#                   "reverted"        intercept was on, subscription works again — intercept left off
+#                   "ok"              intercept was off and the subscription is healthy
+#                   "limited <epoch>" still 429 — intercept restored if it was on; epoch = retry time
 
 PKG="@bitkyc08/opencodex"
 KEYCHAIN_SERVICE="VERCEL_AI_GATEWAY_KEY"
@@ -132,24 +133,39 @@ case "$1" in
   shadow-off)
     shadow_put False; echo ok
     ;;
+  shadow-check)
+    healthy || { echo unknown; exit 0; }
+    admin_curl "http://127.0.0.1:$(port)/api/logs?limit=30" | python3 -c '
+import json, sys, time
+try:
+    d = json.load(sys.stdin)
+    entries = d if isinstance(d, list) else d.get("entries") or d.get("logs") or []
+    cutoff = (time.time() - 600) * 1000
+    hit = any(e.get("provider") == "openai" and e.get("status") == 429
+              and e.get("timestamp", 0) > cutoff for e in entries)
+    print("limited" if hit else "ok")
+except Exception:
+    print("unknown")' 2>/dev/null || echo unknown
+    ;;
   shadow-probe)
     healthy || { echo "error proxy-down"; exit 1; }
     settings=$(admin_curl "$(shadow_url)")
-    echo "$settings" | grep -q '"enabled":true' || { echo disabled; exit 0; }
+    was_on=no
+    echo "$settings" | grep -q '"enabled":true' && was_on=yes
     src=$(echo "$settings" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sourceModels"][0])' 2>/dev/null)
     [ -z "$src" ] && src="gpt-5.6-luna"
     # lift the intercept so the probe reaches the native provider, not the gateway
-    shadow_put False
+    [ "$was_on" = yes ] && shadow_put False
     resp=$(mktemp)
     code=$(curl -s -m 30 -o "$resp" -w '%{http_code}' -X POST "http://127.0.0.1:$(port)/v1/responses" \
       -H 'Content-Type: application/json' \
       -d "{\"model\":\"$src\",\"instructions\":\"Reply with the single word: ok\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"ok?\"}]}],\"reasoning\":{\"effort\":\"low\"},\"stream\":true,\"store\":false}")
     if [ "$code" = "200" ]; then
       rm -f "$resp"
-      echo reverted
+      [ "$was_on" = yes ] && echo reverted || echo ok
       exit 0
     fi
-    shadow_put True
+    [ "$was_on" = yes ] && shadow_put True
     # retry hint comes in two shapes: OpenAI upstream sends resets_at (epoch);
     # the proxy's own account-cooldown gate embeds an ISO time in the message
     resets=$(python3 -c '

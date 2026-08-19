@@ -83,6 +83,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         get { defaults.object(forKey: "KeepProxyAlive") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "KeepProxyAlive") }
     }
+    // standing instruction: route shadow calls to the gateway whenever the subscription is
+    // limited, and back to the subscription when it recovers — the tray flips the intercept
+    // both ways; the checkbox itself never changes on its own
+    var shadowPolicy: Bool {
+        get { defaults.object(forKey: "ShadowPolicy") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "ShadowPolicy") }
+    }
     var desiredOn: Bool {
         get { defaults.bool(forKey: "DesiredOn") }
         set { defaults.set(newValue, forKey: "DesiredOn") }
@@ -130,25 +137,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // MARK: shadow-call auto-revert
-    // While the intercept routes Codex shadow calls to the gateway, periodically try one tiny
-    // native call. When the subscription serves it again, the intercept is flipped off for good.
-    // A failed probe costs nothing (429); a successful one is a single low-effort request.
+    // MARK: shadow-call failover policy
+    // "Gateway When Limited": while the subscription is healthy, shadow calls stay native and
+    // the tray passively watches the request log for 429s; when they appear, the intercept is
+    // flipped on. While the intercept is on, a tiny native probe every 30 min detects recovery
+    // and flips it back off. A failed probe costs nothing (429); a success is one low-effort call.
 
     func shadowTick() {
         guard mode == "on", busy == nil else { return }
         run(["shadow-state"]) { out, _ in
             self.shadowOn = (out == "on")
-            guard self.shadowOn else {
-                self.defaults.removeObject(forKey: "ShadowResetsAt")
-                return
-            }
+            guard self.shadowPolicy else { return }
             let now = Date().timeIntervalSince1970
             let lastProbe = self.defaults.double(forKey: "LastShadowProbe")
-            // probe every 30 min while the intercept is on — OpenAI sometimes resets quota
-            // earlier than the announced time, and a failed probe costs nothing
-            if now - lastProbe > 1800 {
-                self.shadowProbe()
+            if self.shadowOn {
+                // probe every 30 min — OpenAI sometimes resets quota earlier than announced
+                if now - lastProbe > 1800 { self.shadowProbe() }
+            } else {
+                self.defaults.removeObject(forKey: "ShadowResetsAt")
+                // free log check every tick; a fresh native 429 means the sub just hit its limit
+                run(["shadow-check"]) { chk, _ in
+                    if chk == "limited" && now - lastProbe > 300 { self.shadowProbe() }
+                }
             }
         }
     }
@@ -161,6 +171,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.defaults.removeObject(forKey: "ShadowResetsAt")
                 self.showToast("Subscription is back ✓",
                                "Shadow calls are on your ChatGPT plan again. Switch your Codex threads off the gateway when you're ready.")
+            } else if out == "ok" {
+                // intercept already off and the subscription is healthy — nothing to do
+                self.shadowOn = false
+                self.defaults.removeObject(forKey: "ShadowResetsAt")
             } else if out.hasPrefix("limited") {
                 let parts = out.components(separatedBy: " ")
                 if parts.count > 1, let t = Double(parts[1]) {
@@ -168,6 +182,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 } else {
                     // no retry hint in the error — try again in 6 h
                     self.defaults.set(Date().timeIntervalSince1970 + 6 * 3600, forKey: "ShadowResetsAt")
+                }
+                if !self.shadowOn && self.shadowPolicy {
+                    run(["shadow-on"]) { _, _ in
+                        self.shadowOn = true
+                        self.showToast("Subscription limited — shadow calls → gateway",
+                                       "Codex background calls were hitting your ChatGPT usage limit, so they now use the gateway. They switch back automatically when your subscription recovers.")
+                    }
                 }
             }
         }
@@ -212,14 +233,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         toast = panel
     }
 
-    @objc func toggleShadow() {
-        let cmd = shadowOn ? "shadow-off" : "shadow-on"
-        busy = shadowOn ? "Shadow calls → subscription…" : "Shadow calls → gateway…"
-        run([cmd]) { _, _ in
-            self.busy = nil
-            self.defaults.removeObject(forKey: "ShadowResetsAt")
-            self.defaults.set(0.0, forKey: "LastShadowProbe")
-            self.shadowTick()
+    @objc func toggleShadowPolicy() {
+        shadowPolicy.toggle()
+        if shadowPolicy {
+            // decide immediately: probe once — limited engages the intercept, healthy leaves it off
+            defaults.set(0.0, forKey: "LastShadowProbe")
+            shadowProbe()
+        } else {
+            // policy off = shadow calls always on the subscription
+            busy = "Shadow calls → subscription…"
+            run(["shadow-off"]) { _, _ in
+                self.busy = nil
+                self.shadowOn = false
+                self.defaults.removeObject(forKey: "ShadowResetsAt")
+            }
         }
     }
 
@@ -335,8 +362,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let ka = add(sub, "Keep Proxy Alive", #selector(toggleKeepAlive))
         ka.state = keepAlive ? .on : .off
         if mode == "on" {
-            let sc = add(sub, "Shadow Calls via Gateway", #selector(toggleShadow))
-            sc.state = shadowOn ? .on : .off
+            let sc = add(sub, "Shadow Calls: Gateway When Limited", #selector(toggleShadowPolicy))
+            sc.state = shadowPolicy ? .on : .off
         }
         sub.addItem(.separator())
         // version line: update action when npm has something newer, plain label otherwise
