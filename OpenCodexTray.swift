@@ -251,7 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSWorkspace.shared.open(url)
         }
     }
-    @objc func openModels()    { openURL("#dashboard/models") }
+    @objc func openModels()    { openURL("#models") }
     @objc func openLogs()      { openURL("#logs") }
     @objc func openDashboard() { openURL("#dashboard") }
 
