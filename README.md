@@ -9,15 +9,13 @@ One glance tells you whether Codex is routing through OpenCodex or talking to st
    Routing 3 gateway models · port 10100
 Turn Off (back to stock Codex)
 ──────────────
-Manage Models…        ← dashboard model toggles
-Request Log…          ← live per-request log (incl. effective reasoning effort)
-Open Dashboard…
+Open Dashboard…       ← model toggles, live request log, providers
 ──────────────
-✓ Start at Login
-✓ Keep Proxy Alive    ← auto-restarts a dead proxy so Codex never silently breaks
-──────────────
-OpenCodex 2.25.0 — up to date     (becomes "Update OpenCodex (x → y)" when npm has newer)
-Uninstall…
+Settings ▸            ✓ Start at Login
+                      ✓ Keep Proxy Alive   ← auto-restarts a dead proxy so Codex never silently breaks
+                      ──────────
+                      OpenCodex 2.25.0 — up to date   (becomes "Update OpenCodex (x → y)" when npm has newer)
+                      Uninstall…
 ──────────────
 Quit
 ```

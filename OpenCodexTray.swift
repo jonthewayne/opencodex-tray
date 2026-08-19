@@ -169,8 +169,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(.separator())
             add(menu, "Turn Off (back to stock Codex)", #selector(turnOff))
             menu.addItem(.separator())
-            add(menu, "Manage Models…", #selector(openModels))
-            add(menu, "Request Log…", #selector(openLogs))
             add(menu, "Open Dashboard…", #selector(openDashboard))
 
         case "broken":
@@ -187,20 +185,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        addLoginToggle(menu)
-        let ka = add(menu, "Keep Proxy Alive", #selector(toggleKeepAlive))
-        ka.state = keepAlive ? .on : .off
-        menu.addItem(.separator())
-
-        // version line: update action when npm has something newer, plain label otherwise
-        if !latestVersion.isEmpty && !localVersion.isEmpty && latestVersion != localVersion {
-            add(menu, "Update OpenCodex (\(localVersion) → \(latestVersion))", #selector(updateOCX))
-        } else if !localVersion.isEmpty {
-            addInfo(menu, "OpenCodex \(localVersion) — up to date")
-        }
-        add(menu, "Uninstall…", #selector(uninstallOCX))
+        addSettings(menu)
         menu.addItem(.separator())
         add(menu, "Quit", #selector(quitApp))
+    }
+
+    func addSettings(_ menu: NSMenu) {
+        let sub = NSMenu()
+        sub.autoenablesItems = false
+        addLoginToggle(sub)
+        let ka = add(sub, "Keep Proxy Alive", #selector(toggleKeepAlive))
+        ka.state = keepAlive ? .on : .off
+        sub.addItem(.separator())
+        // version line: update action when npm has something newer, plain label otherwise
+        if !latestVersion.isEmpty && !localVersion.isEmpty && latestVersion != localVersion {
+            add(sub, "Update OpenCodex (\(localVersion) → \(latestVersion))", #selector(updateOCX))
+        } else if !localVersion.isEmpty {
+            addInfo(sub, "OpenCodex \(localVersion) — up to date")
+        }
+        add(sub, "Uninstall…", #selector(uninstallOCX))
+        let item = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
+        item.submenu = sub
+        menu.addItem(item)
     }
 
     func addLoginToggle(_ menu: NSMenu) {
@@ -251,8 +257,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSWorkspace.shared.open(url)
         }
     }
-    @objc func openModels()    { openURL("#models") }
-    @objc func openLogs()      { openURL("#logs") }
     @objc func openDashboard() { openURL("#dashboard") }
 
     @objc func toggleLogin() {
