@@ -45,6 +45,8 @@ cd opencodex-tray
 
 `./build.sh` alone builds `OpenCodex Tray.app` in place without installing.
 
+On first launch the app registers itself to start at login (a menu-bar status app is only useful if it's always there). Turn it off in **Settings ▸ Start at Login** if you'd rather launch it manually — the toggle is respected from then on.
+
 ## Gateway key
 
 The proxy reads your Vercel AI Gateway key from the macOS login Keychain at start — service name `VERCEL_AI_GATEWAY_KEY`. It is passed to the proxy as an environment variable and **never written to any config file**. Add it once with:

@@ -96,6 +96,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        // Start at Login defaults to on: register once on first launch; the
+        // Settings toggle (and System Settings) stay the source of truth after.
+        if !defaults.bool(forKey: "DidDefaultLoginItem") {
+            defaults.set(true, forKey: "DidDefaultLoginItem")
+            if SMAppService.mainApp.status == .notRegistered {
+                try? SMAppService.mainApp.register()
+            }
+        }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         menu.delegate = self
         statusItem.menu = menu
