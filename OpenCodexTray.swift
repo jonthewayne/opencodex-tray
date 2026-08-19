@@ -19,8 +19,15 @@ final class ToastView: NSView {
         layer?.borderColor = NSColor.separatorColor.cgColor
         let t = NSTextField(labelWithString: title)
         t.font = .boldSystemFont(ofSize: 13)
-        t.frame = NSRect(x: 14, y: height - 30, width: width - 28, height: 18)
+        t.frame = NSRect(x: 14, y: height - 30, width: width - 48, height: 18)
         addSubview(t)
+        let close = NSButton(frame: NSRect(x: width - 28, y: height - 28, width: 20, height: 20))
+        close.isBordered = false
+        close.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Dismiss")
+        close.contentTintColor = .tertiaryLabelColor
+        close.target = self
+        close.action = #selector(closeClicked)
+        addSubview(close)
         let s = NSTextField(wrappingLabelWithString: text)
         s.font = .systemFont(ofSize: 11)
         s.textColor = .secondaryLabelColor
@@ -29,6 +36,7 @@ final class ToastView: NSView {
         addSubview(s)
     }
     required init?(coder: NSCoder) { fatalError("unused") }
+    @objc private func closeClicked() { onClick() }
     override func mouseDown(with event: NSEvent) { onClick() }
 }
 
