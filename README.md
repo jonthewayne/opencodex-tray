@@ -38,7 +38,7 @@ Quit
 Requires macOS 13+, Xcode command-line tools (`swiftc`), and Node/npm (nvm and Homebrew layouts are both auto-detected).
 
 ```sh
-git clone https://github.com/jonshumate/opencodex-tray.git
+git clone https://github.com/jonthewayne/opencodex-tray.git
 cd opencodex-tray
 ./build.sh install
 ```
