@@ -93,7 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if ProcessInfo.processInfo.arguments.contains("--test-toast") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 self.showToast("Subscription is back ✓",
-                               "Shadow calls are on your ChatGPT plan again. Switch your Codex model off the gateway when you're ready. Click to dismiss.")
+                               "Shadow calls are on your ChatGPT plan again. Switch your Codex threads off the gateway when you're ready.")
             }
         }
     }
@@ -152,7 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.shadowOn = false
                 self.defaults.removeObject(forKey: "ShadowResetsAt")
                 self.showToast("Subscription is back ✓",
-                               "Shadow calls are on your ChatGPT plan again. Switch your Codex model off the gateway when you're ready. Click to dismiss.")
+                               "Shadow calls are on your ChatGPT plan again. Switch your Codex threads off the gateway when you're ready.")
             } else if out.hasPrefix("limited") {
                 let parts = out.components(separatedBy: " ")
                 if parts.count > 1, let t = Double(parts[1]) {
