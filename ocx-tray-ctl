@@ -1,0 +1,108 @@
+#!/bin/zsh
+# ocx-tray-ctl — all system logic for OpenCodex Tray. The Swift app only draws menus.
+# Subcommands:
+#   state         — 5 lines for the app: mode / local version / routed count / port / latest version
+#                   mode: on (injected + healthy) | broken (injected, proxy dead) | off | absent (no ocx)
+#   on            — start the proxy (gateway key pulled from Keychain, never written to disk) + wait for health
+#   off           — ocx stop: stops the proxy and restores stock Codex config
+#   check-update  — print the latest published version (npm, cached ~6h)
+#   update        — npm install -g latest; restarts the proxy if it was on
+#   install       — npm install -g the OpenCodex package
+#   uninstall     — off + npm uninstall -g (keeps ~/.opencodex settings for a later reinstall)
+
+PKG="@bitkyc08/opencodex"
+KEYCHAIN_SERVICE="VERCEL_AI_GATEWAY_KEY"
+CONFIG="$HOME/.codex/config.toml"
+CATALOG="$HOME/.codex/opencodex-catalog.json"
+OCX_HOME="$HOME/.opencodex"
+LOG="$OCX_HOME/tray-proxy.log"
+CACHE="$OCX_HOME/tray-version-cache"
+
+# make node/npm/ocx (nvm or homebrew) reachable in a non-login GUI context
+NODE_BIN=$(/bin/ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | tail -1)
+[ -n "$NODE_BIN" ] && export PATH="$NODE_BIN:$PATH"
+export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:$PATH"
+
+port() {
+  local p
+  p=$(sed -n 's/.*"port": *\([0-9][0-9]*\).*/\1/p' "$OCX_HOME/runtime-port.json" 2>/dev/null | head -1)
+  echo "${p:-10100}"
+}
+
+have_ocx() { command -v ocx >/dev/null 2>&1; }
+injected() { grep -q 'Auto-injected by opencodex' "$CONFIG" 2>/dev/null; }
+healthy()  { curl -s -m 2 "http://127.0.0.1:$(port)/healthz" 2>/dev/null | grep -q '"status":"ok"'; }
+
+local_version() { ocx --version 2>/dev/null | awk '{print $NF}'; }
+cached_latest() { echo "$(awk 'NR==1{print $2}' "$CACHE" 2>/dev/null)"; }
+
+# gateway models = catalog entries whose slug carries a provider prefix ("vercel-ai-gateway/…")
+routed_count() {
+  python3 - <<'PY' 2>/dev/null || echo 0
+import json, os
+try:
+    c = json.load(open(os.path.expanduser("~/.codex/opencodex-catalog.json")))
+    print(sum(1 for m in c.get("models", []) if "/" in str(m.get("slug", ""))))
+except Exception:
+    print(0)
+PY
+}
+
+case "$1" in
+  state)
+    if ! have_ocx; then
+      echo absent; echo ""; echo 0; port; cached_latest; exit 0
+    fi
+    if injected; then
+      if healthy; then echo on; else echo broken; fi
+    else
+      echo off
+    fi
+    local_version
+    routed_count
+    port
+    cached_latest
+    ;;
+  on)
+    injected && healthy && { echo started; exit 0; }
+    mkdir -p "$OCX_HOME"
+    key=$(/usr/bin/security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null)
+    [ -z "$key" ] && echo "no-key"     # app warns; proxy still starts (subscription models keep working)
+    nohup env VERCEL_AI_GATEWAY_KEY="$key" ocx start >>"$LOG" 2>&1 &!
+    for i in {1..20}; do healthy && { echo started; exit 0; }; sleep 1; done
+    echo "failed — see $LOG"; exit 1
+    ;;
+  off)
+    ocx stop >>"$LOG" 2>&1
+    ;;
+  check-update)
+    if [ -f "$CACHE" ] && [ -n "$(find "$CACHE" -mmin -360 2>/dev/null)" ]; then
+      cached_latest; exit 0
+    fi
+    latest=$(npm view "$PKG" version 2>/dev/null)
+    [ -n "$latest" ] && { mkdir -p "$OCX_HOME"; echo "$(date +%s) $latest" > "$CACHE"; }
+    echo "$latest"
+    ;;
+  update)
+    was_on=0; injected && healthy && was_on=1
+    npm install -g "$PKG" >>"$LOG" 2>&1 || { echo "update failed — see $LOG"; exit 1; }
+    rm -f "$CACHE"
+    if [ "$was_on" = 1 ]; then
+      ocx stop >>"$LOG" 2>&1
+      "$0" on >/dev/null || { echo "updated, but proxy didn't restart — see $LOG"; exit 1; }
+    fi
+    echo "updated to $(local_version)"
+    ;;
+  install)
+    npm install -g "$PKG" >>"$LOG" 2>&1 || { echo "install failed — see $LOG"; exit 1; }
+    echo "installed $(local_version)"
+    ;;
+  uninstall)
+    have_ocx && ocx stop >>"$LOG" 2>&1
+    npm uninstall -g "$PKG" >>"$LOG" 2>&1 || { echo "uninstall failed — see $LOG"; exit 1; }
+    echo "uninstalled"
+    ;;
+  *)
+    echo "usage: ocx-tray-ctl {state|on|off|check-update|update|install|uninstall}" >&2; exit 1
+    ;;
+esac

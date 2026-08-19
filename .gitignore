@@ -1,0 +1,6 @@
+OpenCodexTray
+gen-icon
+icon_1024.png
+AppIcon.iconset/
+*.app/
+.DS_Store
