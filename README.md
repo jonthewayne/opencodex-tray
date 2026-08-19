@@ -75,12 +75,12 @@ prints five lines: mode (`on|off|broken|absent`), installed version, routed mode
 
 Codex fires small background "shadow calls" (thread titles, summaries) at your ChatGPT subscription. When the subscription hits its usage limit those calls 429. OpenCodex's *Shadow Call Intercept* can reroute them to a gateway model — but it's a static switch with no failover, so left alone it would keep spending gateway credit after your subscription resets.
 
-The tray closes that loop. While **Shadow Calls via Gateway** is on, it periodically runs `ocx-tray-ctl shadow-probe`: lift the intercept for a moment, send one tiny native low-effort request, and
+The tray closes that loop. While **Shadow Calls via Gateway** is on, it runs `ocx-tray-ctl shadow-probe` every 30 minutes: lift the intercept for a moment, send one tiny native low-effort request, and
 
-- **429** → still limited: the intercept is restored and the error's reset timestamp (OpenAI's `resets_at`, or the proxy's own cooldown time) schedules the next probe — no blind polling;
-- **200** → subscription is back: the intercept stays off and shadow calls return to your plan.
+- **429** → still limited: the intercept is restored, and the error's reset timestamp (OpenAI's `resets_at`, or the proxy's own cooldown time) is shown in the status line;
+- **200** → subscription is back: the intercept stays off, shadow calls return to your plan, and a toast card drops down under the menu-bar icon — floating above other windows until you click it — so you know it's time to move your main Codex model off the gateway too.
 
-A failed probe costs nothing; a successful one is a single low-effort request. The status line shows the next retry time.
+Probing is on a fixed 30-minute cadence rather than waiting for the announced reset, because OpenAI sometimes resets quota early. A failed probe costs nothing; a successful one is a single low-effort request. (Verified: a 429 on one model doesn't cool down others — probing never blocks models that still work.) Launch the app with `--test-toast` to preview the notification card.
 
 ## License
 

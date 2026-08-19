@@ -6,6 +6,32 @@ import ServiceManagement
 
 let ctlPath = Bundle.main.path(forResource: "ocx-tray-ctl", ofType: nil) ?? ""
 
+/// Click-to-dismiss toast content: rounded card with a title and a detail line.
+final class ToastView: NSView {
+    let onClick: () -> Void
+    init(width: CGFloat, height: CGFloat, title: String, text: String, onClick: @escaping () -> Void) {
+        self.onClick = onClick
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        layer?.borderWidth = 1
+        layer?.borderColor = NSColor.separatorColor.cgColor
+        let t = NSTextField(labelWithString: title)
+        t.font = .boldSystemFont(ofSize: 13)
+        t.frame = NSRect(x: 14, y: height - 30, width: width - 28, height: 18)
+        addSubview(t)
+        let s = NSTextField(wrappingLabelWithString: text)
+        s.font = .systemFont(ofSize: 11)
+        s.textColor = .secondaryLabelColor
+        s.frame = NSRect(x: 14, y: 10, width: width - 28, height: height - 44)
+        s.isSelectable = false
+        addSubview(s)
+    }
+    required init?(coder: NSCoder) { fatalError("unused") }
+    override func mouseDown(with event: NSEvent) { onClick() }
+}
+
 /// Run a ctl subcommand off the main thread; `done` is called back on the main thread.
 func run(_ args: [String], done: @escaping (String, Int32) -> Void) {
     DispatchQueue.global().async {
@@ -43,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var fixAttempts = 0         // keep-alive backoff: stop after 3 failed restarts
     var warnedNoKey = false
     var shadowOn = false        // proxy's shadow-call intercept (Codex titles/summaries → gateway)
+    var toast: NSPanel? = nil   // floating notification card; stays up until clicked
 
     var keepAlive: Bool {
         get { defaults.object(forKey: "KeepProxyAlive") as? Bool ?? true }
@@ -63,6 +90,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.refresh() }
         Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.checkForUpdate() }
         Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.shadowTick() }
+        if ProcessInfo.processInfo.arguments.contains("--test-toast") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                self.showToast("Subscription is back ✓",
+                               "Shadow calls are on your ChatGPT plan again. Switch your Codex model off the gateway when you're ready. Click to dismiss.")
+            }
+        }
     }
 
     // MARK: state
@@ -103,10 +136,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return
             }
             let now = Date().timeIntervalSince1970
-            let resetsAt = self.defaults.double(forKey: "ShadowResetsAt")
             let lastProbe = self.defaults.double(forKey: "LastShadowProbe")
-            // probe when there is no known retry time or it has passed (2 min grace), at most every 30 min
-            if (resetsAt == 0 || now > resetsAt + 120) && now - lastProbe > 1800 {
+            // probe every 30 min while the intercept is on — OpenAI sometimes resets quota
+            // earlier than the announced time, and a failed probe costs nothing
+            if now - lastProbe > 1800 {
                 self.shadowProbe()
             }
         }
@@ -118,6 +151,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if out == "reverted" {
                 self.shadowOn = false
                 self.defaults.removeObject(forKey: "ShadowResetsAt")
+                self.showToast("Subscription is back ✓",
+                               "Shadow calls are on your ChatGPT plan again. Switch your Codex model off the gateway when you're ready. Click to dismiss.")
             } else if out.hasPrefix("limited") {
                 let parts = out.components(separatedBy: " ")
                 if parts.count > 1, let t = Double(parts[1]) {
@@ -132,10 +167,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func shadowStatusLine() -> String {
         let t = defaults.double(forKey: "ShadowResetsAt")
-        guard t > 0 else { return "Shadow calls → gateway · watching subscription" }
+        guard t > 0 else { return "Shadow calls → gateway · checking sub every 30 min" }
         let f = DateFormatter()
         f.dateFormat = "EEE h:mm a"
-        return "Shadow calls → gateway · retries sub \(f.string(from: Date(timeIntervalSince1970: t)))"
+        return "Shadow calls → gateway · sub resets \(f.string(from: Date(timeIntervalSince1970: t))) · checking every 30 min"
+    }
+
+    /// Floating card just under the menu-bar icon, above other windows; stays until clicked.
+    func showToast(_ title: String, _ text: String) {
+        toast?.close()
+        let w: CGFloat = 340, h: CGFloat = 84
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: w, height: h),
+                            styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: false)
+        panel.level = .statusBar
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        panel.contentView = ToastView(width: w, height: h, title: title, text: text) { [weak self] in
+            self?.toast?.close()
+            self?.toast = nil
+        }
+        var x: CGFloat = 0, y: CGFloat = 0
+        if let btnWindow = statusItem.button?.window {
+            let f = btnWindow.frame
+            x = f.midX - w / 2
+            y = f.minY - h - 8
+            if let screen = btnWindow.screen {
+                x = min(max(x, screen.visibleFrame.minX + 8), screen.visibleFrame.maxX - w - 8)
+            }
+        }
+        panel.setFrame(NSRect(x: x, y: y, width: w, height: h), display: true)
+        panel.orderFrontRegardless()
+        toast = panel
     }
 
     @objc func toggleShadow() {
