@@ -7,6 +7,7 @@ One glance tells you whether Codex is routing through OpenCodex or talking to st
 ```
 ● OpenCodex — On
    Routing 3 gateway models · port 10100
+   Gateway credits: $17.42                            (Vercel AI Gateway balance, refreshed ~30 min)
    Shadow calls → gateway · retries sub Wed 8:59 PM   (only while the intercept is on)
 Turn Off (back to stock Codex)
 ──────────────
@@ -83,6 +84,12 @@ The tray turns it into a policy. **Shadow Calls: Gateway When Limited** is a sta
 - **Unchecked** — never: shadow calls always stay on your subscription (the intercept is turned off when you uncheck it).
 
 Probing is on a fixed 30-minute cadence rather than waiting for the announced reset, because OpenAI sometimes resets quota early. A failed probe costs nothing; a successful one is a single low-effort request. (Verified: a 429 on one model doesn't cool down others — probing never blocks models that still work.) Launch the app with `--test-toast` to preview the notification card.
+
+Sleep can kill a probe at the worst moment: the probe lifts the intercept, the Mac dozes off before the answer arrives, and the intercept is left off with nobody having seen the result (this happened live on 2026-08-19 — the subscription recovered but no toast ever appeared). Two defenses cover it: the tray re-checks ~8 seconds after every wake (`NSWorkspace.didWakeNotification`), and whenever it notices the intercept is off while it last believed it was on — with no probe of its own in flight — it re-probes immediately. A healthy answer becomes the missed "Subscription is back ✓" toast; a 429 re-engages the intercept. Probe answers that are neither 200 nor 429 (a 502 while Wi-Fi is still coming up, say) are treated as inconclusive and retried in ~2 minutes.
+
+## Gateway credits
+
+While the proxy is on, the menu shows your Vercel AI Gateway credit balance (`GET https://ai-gateway.vercel.sh/v1/credits`, authenticated with the same Keychain key the proxy uses). The value is cached for ~30 minutes in `~/.opencodex/tray-credits-cache`, so opening the menu is a local file read most of the time; a failed fetch keeps showing the last known balance. No key in the Keychain — no line.
 
 ## License
 

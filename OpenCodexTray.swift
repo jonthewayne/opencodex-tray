@@ -77,6 +77,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var fixAttempts = 0         // keep-alive backoff: stop after 3 failed restarts
     var warnedNoKey = false
     var shadowOn = false        // proxy's shadow-call intercept (Codex titles/summaries → gateway)
+    var probeInFlight = false   // a shadow-probe ctl run is currently awaiting its answer
+    var credits = ""            // gateway credit balance, e.g. "17.4157"; "" until fetched
     var toast: NSPanel? = nil   // floating notification card; stays up until clicked
 
     var keepAlive: Bool {
@@ -110,9 +112,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         applyIcon()
         refresh()
         checkForUpdate()
+        refreshCredits()
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.refresh() }
         Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.checkForUpdate() }
         Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.shadowTick() }
+        // Re-check right after the Mac wakes: a probe interrupted by sleep can leave the
+        // intercept flipped without the tray ever hearing the answer, and the sub often
+        // resets while the lid is closed. A short delay lets Wi-Fi come back first.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+                self?.refresh()
+                self?.shadowTick()
+                self?.refreshCredits()
+            }
+        }
         if ProcessInfo.processInfo.arguments.contains("--test-toast") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 self.showToast("Subscription is back ✓",
@@ -154,14 +169,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func shadowTick() {
         guard mode == "on", busy == nil else { return }
         run(["shadow-state"]) { out, _ in
+            let believedOn = self.shadowOn
             self.shadowOn = (out == "on")
             guard self.shadowPolicy else { return }
             let now = Date().timeIntervalSince1970
             let lastProbe = self.defaults.double(forKey: "LastShadowProbe")
             if self.shadowOn {
                 // probe every 30 min — OpenAI sometimes resets quota earlier than announced
-                if now - lastProbe > 1800 { self.shadowProbe() }
+                if now - lastProbe > 1800 && !self.probeInFlight {
+                    self.shadowProbe(announceRecovery: true)
+                }
             } else {
+                // A probe that dies mid-flight (the Mac slept between lifting the intercept
+                // and hearing the answer) leaves the intercept off without the tray ever
+                // seeing "reverted". If we believed it was on and no probe of ours is
+                // running, re-probe now: healthy → the missed "back ✓" toast; limited →
+                // the intercept re-engages.
+                if believedOn && !self.probeInFlight && now - lastProbe > 120 {
+                    self.shadowProbe(announceRecovery: true)
+                    return
+                }
                 self.defaults.removeObject(forKey: "ShadowResetsAt")
                 // free log check every tick; a fresh native 429 means the sub just hit its limit
                 run(["shadow-check"]) { chk, _ in
@@ -171,10 +198,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    func shadowProbe() {
+    /// announceRecovery: the tray believed the intercept was on when this probe was
+    /// scheduled, so a healthy "ok" (intercept found already off) is still a recovery
+    /// worth toasting — it means an earlier probe flipped it off but never reported back.
+    func shadowProbe(announceRecovery: Bool = false) {
+        probeInFlight = true
         defaults.set(Date().timeIntervalSince1970, forKey: "LastShadowProbe")
         run(["shadow-probe"]) { out, _ in
-            if out == "reverted" {
+            self.probeInFlight = false
+            if out == "reverted" || (out == "ok" && announceRecovery) {
                 self.shadowOn = false
                 self.defaults.removeObject(forKey: "ShadowResetsAt")
                 self.showToast("Subscription is back ✓",
@@ -198,6 +230,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                        "Codex background calls were hitting your ChatGPT usage limit, so they now use the gateway. They switch back automatically when your subscription recovers.")
                     }
                 }
+            } else {
+                // inconclusive (proxy hiccup, 502 while the network comes up after wake,
+                // interrupted run) — retry in ~2 min instead of waiting the full 30
+                self.defaults.set(Date().timeIntervalSince1970 - 1800 + 120, forKey: "LastShadowProbe")
             }
         }
     }
@@ -264,6 +300,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// Vercel AI Gateway credit balance; the ctl caches it ~30 min, so calling this on
+    /// every menu open is one local file read most of the time.
+    func refreshCredits() {
+        run(["credits"]) { out, _ in
+            self.credits = Double(out) != nil ? out : ""
+        }
+    }
+
     func applyIcon() {
         let name: String
         switch mode {
@@ -288,6 +332,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         refresh()
         shadowTick()
+        refreshCredits()
         populate(menu)
     }
 
@@ -338,6 +383,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "on":
             addInfo(menu, "● OpenCodex — On")
             addSmall(menu, "Routing \(routedCount) gateway models · port \(port)")
+            if let bal = Double(credits) {
+                addSmall(menu, String(format: "Gateway credits: $%.2f", bal))
+            }
             if shadowOn { addSmall(menu, shadowStatusLine()) }
             menu.addItem(.separator())
             add(menu, "Turn Off (back to stock Codex)", #selector(turnOff))

@@ -17,6 +17,10 @@
 #                   "reverted"        intercept was on, subscription works again — intercept left off
 #                   "ok"              intercept was off and the subscription is healthy
 #                   "limited <epoch>" still 429 — intercept restored if it was on; epoch = retry time
+#                   "error probe <code>" non-429 failure (502 right after wake, network down…) —
+#                                     intercept restored if it was on; the app retries soon
+#   credits       — Vercel AI Gateway credit balance (cached ~30 min); prints a number,
+#                   "absent" (no key in Keychain), or "unknown" (fetch failed, no cache)
 
 PKG="@bitkyc08/opencodex"
 KEYCHAIN_SERVICE="VERCEL_AI_GATEWAY_KEY"
@@ -25,6 +29,7 @@ CATALOG="$HOME/.codex/opencodex-catalog.json"
 OCX_HOME="$HOME/.opencodex"
 LOG="$OCX_HOME/tray-proxy.log"
 CACHE="$OCX_HOME/tray-version-cache"
+CREDITS_CACHE="$OCX_HOME/tray-credits-cache"   # "<epoch> <balance>"
 
 # make node/npm/ocx (nvm or homebrew) reachable in a non-login GUI context
 NODE_BIN=$(/bin/ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | tail -1)
@@ -166,6 +171,13 @@ except Exception:
       exit 0
     fi
     [ "$was_on" = yes ] && shadow_put True
+    # only a 429 means "still limited" — anything else (502 while the network is coming up
+    # after wake, upstream hiccup) is inconclusive and the app should just retry soon
+    if [ "$code" != "429" ]; then
+      rm -f "$resp"
+      echo "error probe ${code:-none}"
+      exit 0
+    fi
     # retry hint comes in two shapes: OpenAI upstream sends resets_at (epoch);
     # the proxy's own account-cooldown gate embeds an ISO time in the message
     resets=$(python3 -c '
@@ -183,7 +195,27 @@ except Exception:
     rm -f "$resp"
     echo "limited ${resets:-unknown}"
     ;;
+  credits)
+    now=$(date +%s)
+    if [ -f "$CREDITS_CACHE" ]; then
+      cached=$(awk -v now="$now" 'NR==1 && now - $1 < 1800 {print $2}' "$CREDITS_CACHE" 2>/dev/null)
+      [ -n "$cached" ] && { echo "$cached"; exit 0; }
+    fi
+    key=$(/usr/bin/security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null)
+    [ -z "$key" ] && { echo absent; exit 0; }
+    bal=$(curl -s -m 8 -H "Authorization: Bearer $key" "https://ai-gateway.vercel.sh/v1/credits" 2>/dev/null \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["balance"])' 2>/dev/null)
+    if [ -n "$bal" ]; then
+      mkdir -p "$OCX_HOME"
+      echo "$now $bal" > "$CREDITS_CACHE"
+      echo "$bal"
+    else
+      # fetch failed — serve the stale cache if there is one rather than flickering the line away
+      stale=$(awk 'NR==1{print $2}' "$CREDITS_CACHE" 2>/dev/null)
+      [ -n "$stale" ] && echo "$stale" || echo unknown
+    fi
+    ;;
   *)
-    echo "usage: ocx-tray-ctl {state|on|off|check-update|update|install|uninstall|shadow-state|shadow-on|shadow-off|shadow-probe}" >&2; exit 1
+    echo "usage: ocx-tray-ctl {state|on|off|check-update|update|install|uninstall|shadow-state|shadow-on|shadow-off|shadow-probe|credits}" >&2; exit 1
     ;;
 esac
