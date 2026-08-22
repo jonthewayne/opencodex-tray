@@ -7,7 +7,8 @@ One glance tells you whether Codex is routing through OpenCodex or talking to st
 ```
 ● OpenCodex — On
    Routing 3 gateway models · port 10100
-   Gateway credits: $17.42                            (Vercel AI Gateway balance, refreshed ~30 min)
+   Vercel credits: $17.42                             (one line per gateway key in the Keychain, refreshed ~30 min)
+   OpenRouter credits: $4.90
    Shadow calls → gateway · retries sub Wed 8:59 PM   (only while the intercept is on)
 Turn Off (back to stock Codex)
 ──────────────
@@ -58,6 +59,8 @@ security add-generic-password -s VERCEL_AI_GATEWAY_KEY -a "$USER" -w
 
 Without the key the proxy still runs and your ChatGPT-subscription models keep working; only gateway models fail.
 
+A second gateway works the same way: add an OpenRouter key under service `OPENROUTER_API_KEY` and reference it from the provider's `apiKey` in `~/.opencodex/config.json` as `"${OPENROUTER_API_KEY}"` — the tray passes both variables to the proxy, and OpenCodex resolves the reference at load. Restart the proxy (Turn Off / Turn On) after adding a key.
+
 ## How it works
 
 The app is a single AppKit file (`OpenCodexTray.swift`). Every system action — health probe, start/stop, npm update, Keychain read — lives in `ocx-tray-ctl`, a plain zsh script bundled into the app's Resources. You can run it yourself:
@@ -89,7 +92,7 @@ Sleep can kill a probe at the worst moment: the probe lifts the intercept, the M
 
 ## Gateway credits
 
-While the proxy is on, the menu shows your Vercel AI Gateway credit balance (`GET https://ai-gateway.vercel.sh/v1/credits`, authenticated with the same Keychain key the proxy uses). The value is cached for ~30 minutes in `~/.opencodex/tray-credits-cache`, so opening the menu is a local file read most of the time; a failed fetch keeps showing the last known balance. No key in the Keychain — no line.
+While the proxy is on, the menu shows a credit balance per gateway you hold a key for: Vercel AI Gateway (`GET https://ai-gateway.vercel.sh/v1/credits` → `balance`) and OpenRouter (`GET https://openrouter.ai/api/v1/credits` → `total_credits − total_usage`), each authenticated with the same Keychain entry the proxy uses. Values are cached ~30 minutes in `~/.opencodex/tray-credits-cache-<gateway>`, so opening the menu is a local file read most of the time; a failed fetch keeps showing the last known balance. No key in the Keychain — no line.
 
 ## License
 

@@ -19,17 +19,19 @@
 #                   "limited <epoch>" still 429 — intercept restored if it was on; epoch = retry time
 #                   "error probe <code>" non-429 failure (502 right after wake, network down…) —
 #                                     intercept restored if it was on; the app retries soon
-#   credits       — Vercel AI Gateway credit balance (cached ~30 min); prints a number,
-#                   "absent" (no key in Keychain), or "unknown" (fetch failed, no cache)
+#   credits       — credit balances, one line per gateway: "vercel <n>" / "openrouter <n>"
+#                   (cached ~30 min); <n> is a number, "absent" (no key in Keychain), or
+#                   "unknown" (fetch failed, no cache)
 
 PKG="@bitkyc08/opencodex"
 KEYCHAIN_SERVICE="VERCEL_AI_GATEWAY_KEY"
+OPENROUTER_SERVICE="OPENROUTER_API_KEY"     # optional second gateway; config.json references ${OPENROUTER_API_KEY}
 CONFIG="$HOME/.codex/config.toml"
 CATALOG="$HOME/.codex/opencodex-catalog.json"
 OCX_HOME="$HOME/.opencodex"
 LOG="$OCX_HOME/tray-proxy.log"
 CACHE="$OCX_HOME/tray-version-cache"
-CREDITS_CACHE="$OCX_HOME/tray-credits-cache"   # "<epoch> <balance>"
+CREDITS_CACHE="$OCX_HOME/tray-credits-cache"   # per gateway: "$CREDITS_CACHE-<name>" holds "<epoch> <balance>"
 
 # make node/npm/ocx (nvm or homebrew) reachable in a non-login GUI context
 NODE_BIN=$(/bin/ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | tail -1)
@@ -94,7 +96,8 @@ case "$1" in
     mkdir -p "$OCX_HOME"
     key=$(/usr/bin/security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null)
     [ -z "$key" ] && echo "no-key"     # app warns; proxy still starts (subscription models keep working)
-    nohup env VERCEL_AI_GATEWAY_KEY="$key" ocx start >>"$LOG" 2>&1 &!
+    orkey=$(/usr/bin/security find-generic-password -s "$OPENROUTER_SERVICE" -w 2>/dev/null)
+    nohup env VERCEL_AI_GATEWAY_KEY="$key" OPENROUTER_API_KEY="$orkey" ocx start >>"$LOG" 2>&1 &!
     for i in {1..20}; do healthy && { echo started; exit 0; }; sleep 1; done
     echo "failed — see $LOG"; exit 1
     ;;
@@ -196,24 +199,28 @@ except Exception:
     echo "limited ${resets:-unknown}"
     ;;
   credits)
-    now=$(date +%s)
-    if [ -f "$CREDITS_CACHE" ]; then
-      cached=$(awk -v now="$now" 'NR==1 && now - $1 < 1800 {print $2}' "$CREDITS_CACHE" 2>/dev/null)
-      [ -n "$cached" ] && { echo "$cached"; exit 0; }
-    fi
-    key=$(/usr/bin/security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null)
-    [ -z "$key" ] && { echo absent; exit 0; }
-    bal=$(curl -s -m 8 -H "Authorization: Bearer $key" "https://ai-gateway.vercel.sh/v1/credits" 2>/dev/null \
-      | python3 -c 'import json,sys; print(json.load(sys.stdin)["balance"])' 2>/dev/null)
-    if [ -n "$bal" ]; then
-      mkdir -p "$OCX_HOME"
-      echo "$now $bal" > "$CREDITS_CACHE"
-      echo "$bal"
-    else
-      # fetch failed — serve the stale cache if there is one rather than flickering the line away
-      stale=$(awk 'NR==1{print $2}' "$CREDITS_CACHE" 2>/dev/null)
-      [ -n "$stale" ] && echo "$stale" || echo unknown
-    fi
+    # balance <name> <keychain-service> <url> <python-expr over parsed json d>
+    balance() {
+      local name=$1 svc=$2 url=$3 expr=$4 cache="$CREDITS_CACHE-$1" now key bal cached stale
+      now=$(date +%s)
+      if [ -f "$cache" ]; then
+        cached=$(awk -v now="$now" 'NR==1 && now - $1 < 1800 {print $2}' "$cache" 2>/dev/null)
+        [ -n "$cached" ] && { echo "$name $cached"; return; }
+      fi
+      key=$(/usr/bin/security find-generic-password -s "$svc" -w 2>/dev/null)
+      [ -z "$key" ] && { echo "$name absent"; return; }
+      bal=$(curl -s -m 8 -H "Authorization: Bearer $key" "$url" 2>/dev/null \
+        | python3 -c "import json,sys; d=json.load(sys.stdin); print($expr)" 2>/dev/null)
+      if [ -n "$bal" ]; then
+        mkdir -p "$OCX_HOME"; echo "$now $bal" > "$cache"; echo "$name $bal"
+      else
+        # fetch failed — serve the stale cache if there is one rather than flickering the line away
+        stale=$(awk 'NR==1{print $2}' "$cache" 2>/dev/null)
+        echo "$name ${stale:-unknown}"
+      fi
+    }
+    balance vercel "$KEYCHAIN_SERVICE" "https://ai-gateway.vercel.sh/v1/credits" 'd["balance"]'
+    balance openrouter "$OPENROUTER_SERVICE" "https://openrouter.ai/api/v1/credits" 'd["data"]["total_credits"]-d["data"]["total_usage"]'
     ;;
   *)
     echo "usage: ocx-tray-ctl {state|on|off|check-update|update|install|uninstall|shadow-state|shadow-on|shadow-off|shadow-probe|credits}" >&2; exit 1

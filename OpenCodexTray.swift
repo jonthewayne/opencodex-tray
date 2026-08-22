@@ -78,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var warnedNoKey = false
     var shadowOn = false        // proxy's shadow-call intercept (Codex titles/summaries → gateway)
     var probeInFlight = false   // a shadow-probe ctl run is currently awaiting its answer
-    var credits = ""            // gateway credit balance, e.g. "17.4157"; "" until fetched
+    var credits: [(String, Double)] = []   // (gateway label, balance) per key in the Keychain
     var toast: NSPanel? = nil   // floating notification card; stays up until clicked
 
     var keepAlive: Bool {
@@ -300,11 +300,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Vercel AI Gateway credit balance; the ctl caches it ~30 min, so calling this on
-    /// every menu open is one local file read most of the time.
+    /// Credit balances per gateway ("vercel 17.41" / "openrouter 4.9" lines from the ctl);
+    /// the ctl caches them ~30 min, so calling this on every menu open is a local file
+    /// read most of the time. Gateways with no key ("absent") simply don't get a line.
     func refreshCredits() {
         run(["credits"]) { out, _ in
-            self.credits = Double(out) != nil ? out : ""
+            let labels = ["vercel": "Vercel", "openrouter": "OpenRouter"]
+            self.credits = out.split(separator: "\n").compactMap { line in
+                let parts = line.split(separator: " ")
+                guard parts.count == 2, let bal = Double(parts[1]) else { return nil }
+                return (labels[String(parts[0])] ?? String(parts[0]), bal)
+            }
         }
     }
 
@@ -383,8 +389,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "on":
             addInfo(menu, "● OpenCodex — On")
             addSmall(menu, "Routing \(routedCount) gateway models · port \(port)")
-            if let bal = Double(credits) {
-                addSmall(menu, String(format: "Gateway credits: $%.2f", bal))
+            for (label, bal) in credits {
+                addSmall(menu, String(format: "%@ credits: $%.2f", label, bal))
             }
             if shadowOn { addSmall(menu, shadowStatusLine()) }
             menu.addItem(.separator())
