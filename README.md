@@ -11,13 +11,14 @@ One glance tells you whether Codex is routing through OpenCodex or talking to st
    OpenRouter credits: $4.90
    Shadow calls → gateway · retries sub Wed 8:59 PM   (only while the intercept is on)
 Restart Proxy         ← stop everything, including orphans, and start clean on the configured port
-Turn Off (back to stock Codex)
 ──────────────
 Open Dashboard…       ← model toggles, live request log, providers
 ──────────────
 Settings ▸            ✓ Start at Login
                       ✓ Keep Proxy Alive   ← auto-restarts a dead proxy so Codex never silently breaks
                       ✓ Shadow Calls: Gateway When Limited   ← standing policy; tray flips the intercept both ways
+                      ──────────
+                      Turn Off (back to stock Codex)   ← deliberate and rare, so it lives here
                       ──────────
                       OpenCodex 2.25.0 — up to date   (becomes "Update OpenCodex (x → y)" when npm has newer)
                       Uninstall…
@@ -31,7 +32,7 @@ Quit
 |---|---|---|
 | ● | On | Codex config is injected and the proxy answers `/healthz` |
 | ○ | Off | Stock Codex — proxy stopped, native config restored |
-| ⚠ | Attention | Config still points at the proxy but it isn't responding — menu offers **Fix: Restart Proxy** |
+| ⚠ | Attention | Config still points at the proxy but it isn't responding — menu offers **Fix: Restart Proxy** and, as the escape hatch, **Turn Off** at the top level |
 | ◌ | Absent | OpenCodex isn't installed — menu collapses to **Install OpenCodex…** |
 
 "Off" is a healthy state, not an error: Codex works normally against OpenAI, just without the gateway models.
@@ -73,7 +74,7 @@ The app is a single AppKit file (`OpenCodexTray.swift`). Every system action —
 prints five lines: mode (`on|off|broken|absent`), installed version, routed model count, port, and the latest published version (cached ~6 h).
 
 - **Turn On** = `ocx start` detached, with the Keychain key in its environment, then waits for `/healthz`.
-- **Turn Off** = `ocx stop`, then reap — stops every proxy process and restores your original `~/.codex/config.toml`.
+- **Turn Off** (under Settings) = `ocx stop`, then reap — stops every proxy process and restores your original `~/.codex/config.toml`. It is one level down because going back to stock Codex is rare and deliberate; the ⚠ state surfaces it at the top level, where it is the escape hatch.
 - **Restart Proxy** = Turn Off then Turn On. This is the supported way to restart, and the only one that clears an orphaned proxy; see below.
 - **Keep Proxy Alive** retries a dead proxy up to 3 times, then leaves the ⚠ menu for you.
 - **Update** = `npm install -g` latest, restarting the proxy if it was on.

@@ -395,7 +395,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if shadowOn { addSmall(menu, shadowStatusLine()) }
             menu.addItem(.separator())
             add(menu, "Restart Proxy", #selector(restartProxy))
-            add(menu, "Turn Off (back to stock Codex)", #selector(turnOff))
             menu.addItem(.separator())
             add(menu, "Open Dashboard…", #selector(openDashboard))
 
@@ -429,6 +428,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             sc.state = shadowPolicy ? .on : .off
         }
         sub.addItem(.separator())
+        // Going back to stock Codex is a deliberate, rare action, so it sits here rather than
+        // beside Restart Proxy — the top level stays the everyday operations. Only in the "on"
+        // state: there is nothing to turn off when already off, and the "broken" state keeps its
+        // own top-level Turn Off as the escape hatch, so it must not be duplicated here.
+        if mode == "on" {
+            add(sub, "Turn Off (back to stock Codex)", #selector(turnOff))
+            sub.addItem(.separator())
+        }
         // version line: update action when npm has something newer, plain label otherwise
         if !latestVersion.isEmpty && !localVersion.isEmpty && latestVersion != localVersion {
             add(sub, "Update OpenCodex (\(localVersion) → \(latestVersion))", #selector(updateOCX))
