@@ -155,7 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if self.keepAlive && self.desiredOn && self.mode == "broken"
                 && self.busy == nil && self.fixAttempts < 3 {
                 self.fixAttempts += 1
-                self.startProxy(verb: "Restarting proxy…")
+                self.startProxy(verb: "Restarting proxy…", action: "restart")
             }
         }
     }
@@ -394,6 +394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             if shadowOn { addSmall(menu, shadowStatusLine()) }
             menu.addItem(.separator())
+            add(menu, "Restart Proxy", #selector(restartProxy))
             add(menu, "Turn Off (back to stock Codex)", #selector(turnOff))
             menu.addItem(.separator())
             add(menu, "Open Dashboard…", #selector(openDashboard))
@@ -447,9 +448,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: actions
 
-    func startProxy(verb: String) {
+    // action "on" starts a stopped proxy; "restart" stops every proxy process — including one
+    // orphaned by a crash or an npm update — before starting, so the new proxy gets the
+    // configured port back instead of falling back to a random one.
+    func startProxy(verb: String, action: String = "on") {
         busy = verb
-        run(["on"]) { out, code in
+        run([action]) { out, code in
             self.busy = nil
             if out.contains("no-key") && !self.warnedNoKey {
                 self.warnedNoKey = true
@@ -471,7 +475,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func fixProxy() {
         fixAttempts = 0
-        startProxy(verb: "Restarting proxy…")
+        startProxy(verb: "Restarting proxy…", action: "restart")
+    }
+
+    @objc func restartProxy() {
+        desiredOn = true
+        fixAttempts = 0
+        startProxy(verb: "Restarting proxy…", action: "restart")
     }
 
     @objc func turnOff() {

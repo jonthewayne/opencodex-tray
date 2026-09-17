@@ -10,6 +10,7 @@ One glance tells you whether Codex is routing through OpenCodex or talking to st
    Vercel credits: $17.42                             (one line per gateway key in the Keychain, refreshed ~30 min)
    OpenRouter credits: $4.90
    Shadow calls → gateway · retries sub Wed 8:59 PM   (only while the intercept is on)
+Restart Proxy         ← stop everything, including orphans, and start clean on the configured port
 Turn Off (back to stock Codex)
 ──────────────
 Open Dashboard…       ← model toggles, live request log, providers
@@ -72,10 +73,41 @@ The app is a single AppKit file (`OpenCodexTray.swift`). Every system action —
 prints five lines: mode (`on|off|broken|absent`), installed version, routed model count, port, and the latest published version (cached ~6 h).
 
 - **Turn On** = `ocx start` detached, with the Keychain key in its environment, then waits for `/healthz`.
-- **Turn Off** = `ocx stop` — stops the proxy and restores your original `~/.codex/config.toml`.
+- **Turn Off** = `ocx stop`, then reap — stops every proxy process and restores your original `~/.codex/config.toml`.
+- **Restart Proxy** = Turn Off then Turn On. This is the supported way to restart, and the only one that clears an orphaned proxy; see below.
 - **Keep Proxy Alive** retries a dead proxy up to 3 times, then leaves the ⚠ menu for you.
 - **Update** = `npm install -g` latest, restarting the proxy if it was on.
 - **Uninstall** removes the npm package but keeps `~/.opencodex` so a reinstall restores your setup.
+
+### Why restart is more than stop-then-start
+
+`ocx stop` finds the proxy through the state a proxy records when it starts — `ocx.pid` and
+`runtime-port.json` in `~/.opencodex`. When a second proxy starts, it overwrites both, and the
+older one becomes invisible to `stop`: it survives, still holding the configured port (usually
+`10100`). A proxy left by an older package version can escape `stop` the same way. On 2.57.0
+`stop` is good at finding a proxy it started — every orphan we could stage in testing was still
+caught — but it is not guaranteed, and it demonstrably missed one (see below).
+
+Starting a new proxy then looks like it worked: it can't bind the busy port, quietly falls back
+to a random one, and rewrites `~/.codex/config.toml` to match. Codex follows the rewrite and is
+fine, so the tray shows a healthy ●. But anything else pointed at the usual port — a script, a
+dashboard bookmark, another agent's config — still reaches the orphan. If npm has moved the
+package underneath it (an update, a reinstall), that orphan answers every request with:
+
+```json
+{"error":{"type":"server_error","code":"package_tree_changed",
+  "message":"OpenCodex package files changed while this proxy was running; restart OpenCodex before retrying."}}
+```
+
+and no amount of stop-then-start clears it, because stop never knew about it. This happened on
+2026-09-17: a proxy started 2026-09-14 under an older package version outlived several
+stop/start cycles on port 10100 while the tray showed a healthy ● on a random fallback port.
+
+So `off` now reaps every opencodex proxy process — `ocx stop` first, then `TERM` (and `KILL` if
+needed) for any `ocx start` launcher or its bun child still running. `restart` is `off` then
+`on`, which means the fresh proxy gets its configured port back. **Update**, **Fix: Restart
+Proxy**, and **Keep Proxy Alive** all go through this path, since an npm update is exactly what
+poisons a surviving proxy.
 
 ## Shadow-call failover
 

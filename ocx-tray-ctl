@@ -4,7 +4,8 @@
 #   state         — 5 lines for the app: mode / local version / routed count / port / latest version
 #                   mode: on (injected + healthy) | broken (injected, proxy dead) | off | absent (no ocx)
 #   on            — start the proxy (gateway key pulled from Keychain, never written to disk) + wait for health
-#   off           — ocx stop: stops the proxy and restores stock Codex config
+#   off           — ocx stop + reap: stops every proxy process and restores stock Codex config
+#   restart       — off then on; the supported way to restart, because it reaps orphans first
 #   check-update  — print the latest published version (npm, cached ~6h)
 #   update        — npm install -g latest; restarts the proxy if it was on
 #   install       — npm install -g the OpenCodex package
@@ -61,6 +62,33 @@ print(json.dumps(d))" 2>/dev/null)
 injected() { grep -q 'Auto-injected by opencodex' "$CONFIG" 2>/dev/null; }
 healthy()  { curl -s -m 2 "http://127.0.0.1:$(port)/healthz" 2>/dev/null | grep -q '"status":"ok"'; }
 
+# Every opencodex proxy process, managed or orphaned: the `ocx start` launcher and the bun
+# child that actually holds the port. `ocx stop` goes by the state a proxy records at startup
+# (ocx.pid, runtime-port.json); a second proxy overwrites both, so the older one goes
+# invisible and survives the stop — still holding the configured port. The next `on` then
+# silently falls back to a random port, so Codex follows the rewritten config while anything
+# pointed at the usual port keeps hitting the orphan (which answers `package_tree_changed`
+# once npm has moved the package underneath it). The tray app's own path is capital-O
+# "OpenCodex Tray.app", so these lowercase patterns never match it.
+proxy_pids() {
+  { pgrep -f "$PKG"; pgrep -f '/bin/ocx start'; } 2>/dev/null | sort -un | grep -vx "$$"
+}
+
+# TERM every proxy process, then KILL whatever is still holding on
+reap() {
+  local pids i
+  pids=$(proxy_pids) || true
+  [ -z "$pids" ] && return 0
+  echo "$pids" | xargs kill 2>/dev/null
+  for i in {1..5}; do
+    sleep 1
+    pids=$(proxy_pids) || true
+    [ -z "$pids" ] && return 0
+  done
+  echo "$pids" | xargs kill -9 2>/dev/null
+  sleep 1
+}
+
 local_version() { ocx --version 2>/dev/null | awk '{print $NF}'; }
 cached_latest() { echo "$(awk 'NR==1{print $2}' "$CACHE" 2>/dev/null)"; }
 
@@ -103,6 +131,12 @@ case "$1" in
     ;;
   off)
     ocx stop >>"$LOG" 2>&1
+    reap
+    ;;
+  restart)
+    have_ocx || { echo absent; exit 1; }
+    "$0" off
+    "$0" on
     ;;
   check-update)
     if [ -f "$CACHE" ] && [ -n "$(find "$CACHE" -mmin -360 2>/dev/null)" ]; then
@@ -117,8 +151,7 @@ case "$1" in
     npm install -g "$PKG" >>"$LOG" 2>&1 || { echo "update failed — see $LOG"; exit 1; }
     rm -f "$CACHE"
     if [ "$was_on" = 1 ]; then
-      ocx stop >>"$LOG" 2>&1
-      "$0" on >/dev/null || { echo "updated, but proxy didn't restart — see $LOG"; exit 1; }
+      "$0" restart >/dev/null || { echo "updated, but proxy didn't restart — see $LOG"; exit 1; }
     fi
     echo "updated to $(local_version)"
     ;;
@@ -127,7 +160,7 @@ case "$1" in
     echo "installed $(local_version)"
     ;;
   uninstall)
-    have_ocx && ocx stop >>"$LOG" 2>&1
+    have_ocx && { ocx stop >>"$LOG" 2>&1; reap; }
     npm uninstall -g "$PKG" >>"$LOG" 2>&1 || { echo "uninstall failed — see $LOG"; exit 1; }
     echo "uninstalled"
     ;;
@@ -223,6 +256,6 @@ except Exception:
     balance openrouter "$OPENROUTER_SERVICE" "https://openrouter.ai/api/v1/credits" 'd["data"]["total_credits"]-d["data"]["total_usage"]'
     ;;
   *)
-    echo "usage: ocx-tray-ctl {state|on|off|check-update|update|install|uninstall|shadow-state|shadow-on|shadow-off|shadow-probe|credits}" >&2; exit 1
+    echo "usage: ocx-tray-ctl {state|on|off|restart|check-update|update|install|uninstall|shadow-state|shadow-on|shadow-off|shadow-probe|credits}" >&2; exit 1
     ;;
 esac
