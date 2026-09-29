@@ -90,6 +90,18 @@ reap() {
 }
 
 local_version() { ocx --version 2>/dev/null | awk '{print $NF}'; }
+
+# npm install -g of opencodex can exit 0 even when bun's postinstall failed to place its
+# binary; the proxy then dies at start with "Bun binary missing". Check before restarting.
+bun_ok() { [ -x "$(npm root -g 2>/dev/null)/$PKG/node_modules/bun/bin/bun.exe" ]; }
+npm_install() { (cd "$HOME" && npm install -g --allow-scripts=bun "$PKG") >>"$LOG" 2>&1; }
+# install, then retry once if bun's binary didn't land
+install_verified() {
+  npm_install || return 1
+  bun_ok && return 0
+  echo "[ocx-tray-ctl] bun binary missing after install — retrying once" >>"$LOG"
+  npm_install && bun_ok
+}
 cached_latest() { echo "$(awk 'NR==1{print $2}' "$CACHE" 2>/dev/null)"; }
 
 # gateway models = catalog entries whose slug carries a provider prefix ("vercel-ai-gateway/…")
@@ -148,7 +160,8 @@ case "$1" in
     ;;
   update)
     was_on=0; injected && healthy && was_on=1
-    npm install -g "$PKG" >>"$LOG" 2>&1 || { echo "update failed — see $LOG"; exit 1; }
+    # on a broken install, leave the running proxy alone rather than restart into a dead one
+    install_verified || { echo "update failed (bun runtime missing?) — proxy left running, see $LOG"; exit 1; }
     rm -f "$CACHE"
     if [ "$was_on" = 1 ]; then
       "$0" restart >/dev/null || { echo "updated, but proxy didn't restart — see $LOG"; exit 1; }
@@ -156,7 +169,7 @@ case "$1" in
     echo "updated to $(local_version)"
     ;;
   install)
-    npm install -g "$PKG" >>"$LOG" 2>&1 || { echo "install failed — see $LOG"; exit 1; }
+    install_verified || { echo "install failed (bun runtime missing?) — see $LOG"; exit 1; }
     echo "installed $(local_version)"
     ;;
   uninstall)
