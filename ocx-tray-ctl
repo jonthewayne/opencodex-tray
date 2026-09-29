@@ -2,7 +2,8 @@
 # ocx-tray-ctl — all system logic for OpenCodex Tray. The Swift app only draws menus.
 # Subcommands:
 #   state         — 5 lines for the app: mode / local version / routed count / port / latest version
-#                   mode: on (injected + healthy) | broken (injected, proxy dead) | off | absent (no ocx)
+#                   mode: on (injected + healthy) | starting (injected, proxy <90s old, not up yet)
+#                         | broken (injected, proxy dead) | off | absent (no ocx)
 #   on            — start the proxy (gateway key pulled from Keychain, never written to disk) + wait for health
 #   off           — ocx stop + reap: stops every proxy process and restores stock Codex config
 #   restart       — off then on; the supported way to restart, because it reaps orphans first
@@ -89,6 +90,57 @@ reap() {
   sleep 1
 }
 
+# A proxy start in progress — ours, Codex's, or a shell's — has a young process that isn't
+# answering yet. Treating that as "broken" made Keep Proxy Alive start a second proxy on top
+# of it; both then died on OpenCodex's service-state mutation lock.
+START_GRACE=90
+etime_secs() {   # ps etime "[[dd-]hh:]mm:ss" → seconds
+  ps -o etime= -p "$1" 2>/dev/null | tr -d ' ' |
+    awk -F'[-:]' '{s=$NF+$(NF-1)*60; if(NF>=3)s+=$(NF-2)*3600; if(NF>=4)s+=$(NF-3)*86400; print s}'
+}
+starting() {
+  healthy && return 1
+  local p s
+  for p in $(proxy_pids); do
+    s=$(etime_secs "$p")
+    [ -n "$s" ] && [ "$s" -lt "$START_GRACE" ] && return 0
+  done
+  return 1
+}
+# wait out a start already in progress; succeeds if it comes up healthy
+await_start() {
+  local i
+  for i in {1..$START_GRACE}; do
+    healthy && return 0
+    starting || return 1
+    sleep 1
+  done
+  return 1
+}
+
+# Serialize the mutating verbs: a tray click, Keep Proxy Alive, and an update must never
+# run `ocx start`/`ocx stop` concurrently. Nested "$0" calls inherit the held lock.
+LOCK="$OCX_HOME/tray-ctl.lock"
+OWN_LOCK=
+# script-level: a zsh EXIT trap set inside a function would fire when the function returns
+trap '[ -n "$OWN_LOCK" ] && rm -rf "$LOCK"' EXIT
+take_lock() {
+  [ -n "$OCX_TRAY_LOCKED" ] && return 0
+  local i
+  for i in {1..120}; do
+    if mkdir "$LOCK" 2>/dev/null; then
+      echo $$ >"$LOCK/pid"
+      OWN_LOCK=1
+      export OCX_TRAY_LOCKED=1
+      return 0
+    fi
+    # holder died without cleaning up → reclaim
+    kill -0 "$(cat "$LOCK/pid" 2>/dev/null)" 2>/dev/null || rm -rf "$LOCK"
+    sleep 1
+  done
+  echo "busy — another ocx-tray-ctl action is still running"; exit 1
+}
+
 local_version() { ocx --version 2>/dev/null | awk '{print $NF}'; }
 
 # npm install -g of opencodex can exit 0 even when bun's postinstall failed to place its
@@ -122,7 +174,7 @@ case "$1" in
       echo absent; echo ""; echo 0; port; cached_latest; exit 0
     fi
     if injected; then
-      if healthy; then echo on; else echo broken; fi
+      if healthy; then echo on; elif starting; then echo starting; else echo broken; fi
     else
       echo off
     fi
@@ -132,21 +184,28 @@ case "$1" in
     cached_latest
     ;;
   on)
+    take_lock
     injected && healthy && { echo started; exit 0; }
+    await_start && { echo started; exit 0; }   # someone else's start was already under way
     mkdir -p "$OCX_HOME"
     key=$(/usr/bin/security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null)
     [ -z "$key" ] && echo "no-key"     # app warns; proxy still starts (subscription models keep working)
     orkey=$(/usr/bin/security find-generic-password -s "$OPENROUTER_SERVICE" -w 2>/dev/null)
     nohup env VERCEL_AI_GATEWAY_KEY="$key" OPENROUTER_API_KEY="$orkey" ocx start >>"$LOG" 2>&1 &!
-    for i in {1..20}; do healthy && { echo started; exit 0; }; sleep 1; done
+    sleep 2
+    await_start && { echo started; exit 0; }
     echo "failed — see $LOG"; exit 1
     ;;
   off)
+    take_lock
     ocx stop >>"$LOG" 2>&1
     reap
     ;;
   restart)
     have_ocx || { echo absent; exit 1; }
+    take_lock
+    # a start already under way (Codex, a shell, another click) that comes up is the restart
+    starting && await_start && { echo started; exit 0; }
     "$0" off
     "$0" on
     ;;
@@ -159,6 +218,7 @@ case "$1" in
     echo "$latest"
     ;;
   update)
+    take_lock
     was_on=0; injected && healthy && was_on=1
     # on a broken install, leave the running proxy alone rather than restart into a dead one
     install_verified || { echo "update failed (bun runtime missing?) — proxy left running, see $LOG"; exit 1; }
@@ -169,10 +229,12 @@ case "$1" in
     echo "updated to $(local_version)"
     ;;
   install)
+    take_lock
     install_verified || { echo "install failed (bun runtime missing?) — see $LOG"; exit 1; }
     echo "installed $(local_version)"
     ;;
   uninstall)
+    take_lock
     have_ocx && { ocx stop >>"$LOG" 2>&1; reap; }
     npm uninstall -g "$PKG" >>"$LOG" 2>&1 || { echo "uninstall failed — see $LOG"; exit 1; }
     echo "uninstalled"
