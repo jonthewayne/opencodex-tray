@@ -71,12 +71,14 @@ The app is a single AppKit file (`OpenCodexTray.swift`). Every system action —
 ./ocx-tray-ctl state
 ```
 
-prints five lines: mode (`on|off|broken|absent`), installed version, routed model count, port, and the latest published version (cached ~6 h).
+prints five lines: mode (`on|starting|off|broken|absent`), installed version, routed model count, port, and the latest published version (cached ~6 h).
 
 - **Turn On** = `ocx start` detached, with the Keychain key in its environment, then waits for `/healthz`.
 - **Turn Off** (under Settings) = `ocx stop`, then reap — stops every proxy process and restores your original `~/.codex/config.toml`. It is one level down because going back to stock Codex is rare and deliberate; the ⚠ state surfaces it at the top level, where it is the escape hatch.
 - **Restart Proxy** = Turn Off then Turn On. This is the supported way to restart, and the only one that clears an orphaned proxy; see below.
 - **Keep Proxy Alive** retries a dead proxy up to 3 times, then leaves the ⚠ menu for you.
+- **Starting…** (dotted circle) means a proxy process under 90 s old exists but isn't healthy yet.
+  Keep Proxy Alive waits instead of launching a second one, and Turn On / Restart wait for it too.
 - A failed start shows a nonmodal notice rather than a blocking alert. If Keep Proxy Alive brings
   the proxy up on a later attempt, the next healthy state refresh removes that notice automatically.
 - **Update** = `npm install -g` latest, restarting the proxy if it was on.

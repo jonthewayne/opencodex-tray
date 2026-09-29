@@ -72,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let defaults = UserDefaults.standard
 
     // last known state from `ocx-tray-ctl state`
-    var mode = "off"            // on | broken | off | absent
+    var mode = "off"            // on | starting | broken | off | absent
     var localVersion = ""
     var routedCount = "0"
     var port = "10100"
@@ -339,10 +339,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applyIcon() {
         let name: String
         switch mode {
-        case "on":     name = "circle.fill"
-        case "broken": name = "exclamationmark.triangle.fill"
-        case "absent": name = "circle.dashed"
-        default:       name = "circle"
+        case "on":       name = "circle.fill"
+        case "starting": name = "circle.dotted"
+        case "broken":   name = "exclamationmark.triangle.fill"
+        case "absent":   name = "circle.dashed"
+        default:         name = "circle"
         }
         let cfg = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
         if let img = NSImage(systemSymbolName: name, accessibilityDescription: "OpenCodex")?
@@ -419,6 +420,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             add(menu, "Restart Proxy", #selector(restartProxy))
             menu.addItem(.separator())
             add(menu, "Open Dashboard…", #selector(openDashboard))
+
+        case "starting":
+            // A proxy process is up but not answering health checks yet. Keep Proxy Alive leaves
+            // this alone; Turn Off stays reachable in case the start never finishes.
+            addInfo(menu, "◌ OpenCodex — Starting…")
+            addSmall(menu, "Waiting for the proxy to answer health checks")
+            menu.addItem(.separator())
+            add(menu, "Turn Off (back to stock Codex)", #selector(turnOff))
 
         case "broken":
             addInfo(menu, "⚠ OpenCodex — proxy not responding")
