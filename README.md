@@ -77,6 +77,8 @@ prints five lines: mode (`on|off|broken|absent`), installed version, routed mode
 - **Turn Off** (under Settings) = `ocx stop`, then reap — stops every proxy process and restores your original `~/.codex/config.toml`. It is one level down because going back to stock Codex is rare and deliberate; the ⚠ state surfaces it at the top level, where it is the escape hatch.
 - **Restart Proxy** = Turn Off then Turn On. This is the supported way to restart, and the only one that clears an orphaned proxy; see below.
 - **Keep Proxy Alive** retries a dead proxy up to 3 times, then leaves the ⚠ menu for you.
+- A failed start shows a nonmodal notice rather than a blocking alert. If Keep Proxy Alive brings
+  the proxy up on a later attempt, the next healthy state refresh removes that notice automatically.
 - **Update** = `npm install -g` latest, restarting the proxy if it was on.
 - **Uninstall** removes the npm package but keeps `~/.opencodex` so a reinstall restores your setup.
 

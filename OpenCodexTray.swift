@@ -62,6 +62,11 @@ func run(_ args: [String], done: @escaping (String, Int32) -> Void) {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    enum ToastKind {
+        case general
+        case proxyStartFailure
+    }
+
     var statusItem: NSStatusItem!
     let menu = NSMenu()
     let defaults = UserDefaults.standard
@@ -80,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var probeInFlight = false   // a shadow-probe ctl run is currently awaiting its answer
     var credits: [(String, Double)] = []   // (gateway label, balance) per key in the Keychain
     var toast: NSPanel? = nil   // floating notification card; stays up until clicked
+    var toastKind: ToastKind? = nil
 
     var keepAlive: Bool {
         get { defaults.object(forKey: "KeepProxyAlive") as? Bool ?? true }
@@ -134,6 +140,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                "Shadow calls are on your ChatGPT plan again. Switch your Codex threads off the gateway when you're ready.")
             }
         }
+        if ProcessInfo.processInfo.arguments.contains("--test-proxy-failure-toast") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                self.showToast(
+                    "Proxy didn't start",
+                    "Test failure notice; a healthy state refresh should clear this automatically.",
+                    kind: .proxyStartFailure
+                )
+            }
+        }
     }
 
     // MARK: state
@@ -149,6 +164,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if self.mode == "on" {
                 self.desiredOn = true
                 self.fixAttempts = 0
+                if self.toastKind == .proxyStartFailure {
+                    self.toast?.close()
+                    self.toast = nil
+                    self.toastKind = nil
+                }
             }
             self.applyIcon()
             // Keep Proxy Alive: restart a dead proxy while Codex config still points at it
@@ -247,8 +267,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// Floating card just under the menu-bar icon, above other windows; stays until clicked.
-    func showToast(_ title: String, _ text: String) {
+    func showToast(_ title: String, _ text: String, kind: ToastKind = .general) {
         toast?.close()
+        toastKind = kind
         let w: CGFloat = 340, h: CGFloat = 84
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: w, height: h),
                             styleMask: [.borderless, .nonactivatingPanel],
@@ -262,6 +283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.contentView = ToastView(width: w, height: h, title: title, text: text) { [weak self] in
             self?.toast?.close()
             self?.toast = nil
+            self?.toastKind = nil
         }
         var x: CGFloat = 0, y: CGFloat = 0
         if let btnWindow = statusItem.button?.window {
@@ -468,8 +490,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                            "No VERCEL_AI_GATEWAY_KEY item in your login Keychain. The proxy is running and subscription models still work, but gateway models will fail until the key is added.")
             }
             if code != 0 {
-                self.alert("Proxy didn't start",
-                           "OpenCodex did not come up. Check ~/.opencodex/tray-proxy.log for details.")
+                self.showToast(
+                    "Proxy didn't start",
+                    "OpenCodex did not come up. Check ~/.opencodex/tray-proxy.log for details.",
+                    kind: .proxyStartFailure
+                )
             }
             self.refresh()
         }
